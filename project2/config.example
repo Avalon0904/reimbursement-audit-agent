@@ -1,0 +1,5 @@
+# 复制本文件为 config.local 后填入真实值（config.local 已被 git 忽略）
+KIMI_BASE_URL=https://api.moonshot.cn/v1
+KIMI_API_KEY=sk-your-key
+ZHIPU_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+ZHIPU_API_KEY=your-key

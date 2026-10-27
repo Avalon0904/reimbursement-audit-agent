@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>报销合规审核 Agent · 演示台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #f4f6f9; color: #1f2937; }
+  header { background: #1e3a5f; color: #fff; padding: 14px 24px; }
+  header h1 { font-size: 18px; } header p { font-size: 12px; opacity: .75; margin-top: 4px; }
+  main { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; padding: 16px 24px; }
+  .card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .card h2 { font-size: 15px; margin-bottom: 12px; border-left: 4px solid #1e3a5f; padding-left: 8px; }
+  .full { grid-column: 1 / -1; }
+  button { background: #1e3a5f; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px;
+           cursor: pointer; font-size: 13px; margin: 2px; }
+  button.ghost { background: #e5e9f0; color: #1f2937; }
+  button.ok { background: #15803d; } button.no { background: #b91c1c; }
+  select, input { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; margin: 2px; }
+  #log { background: #0f172a; color: #a5f3a5; font-family: Consolas, monospace; font-size: 12px;
+         border-radius: 8px; padding: 12px; height: 300px; overflow-y: auto; margin-top: 10px; }
+  #log .sys { color: #7dd3fc; } #log .warn { color: #fcd34d; } #log .bad { color: #fca5a5; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #eef0f4; text-align: left; }
+  th { background: #f8fafc; }
+  .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .pass { background: #dcfce7; color: #15803d; } .reject { background: #fee2e2; color: #b91c1c; }
+  .review, .escalate, .pending { background: #fef3c7; color: #92400e; }
+  .verdict-card { margin-top: 10px; padding: 10px; border-radius: 8px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>报销合规审核 Agent · 演示台</h1>
+  <p>LangGraph 主干：OCR(GLM-4V-Flash) → 规则校验(0 token) → 查验(fail-closed) → 台账连号 → 结论/转人工 ｜ 进度为图执行流实时推送 ｜ 演示语料为合成数据，非真实企业单据</p>
+</header>
+<main>
+  <div class="card">
+    <h2>① 审单台</h2>
+    <div>
+      示例单：
+      <button class="ghost" onclick="runDemo('INV-R01')">R01 正常单→通过</button>
+      <button class="ghost" onclick="runDemo('INV-A02')">A02 压线违规→驳回</button>
+      <button class="ghost" onclick="runDemo('INV-D01')">D01 超大额→转人工</button>
+      <button class="ghost" onclick="runDemo('INV-E01')">E01 伪造→查验拦截</button>
+    </div>
+    <div style="margin-top:8px">
+      或上传发票图：<input type="file" id="file" accept="image/*">
+      <select id="cat">
+        <option>住宿费</option><option>办公用品</option><option>打车费</option><option>劳保用品</option>
+      </select>
+      <button onclick="runUpload()">提交审核</button>
+    </div>
+    <div id="log"><div class="sys">等待提交……</div></div>
+    <div id="verdict" class="verdict-card"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 待审队列（挂起即入队，批复后续跑）</h2>
+    <div id="pending"><p style="color:#9ca3af;font-size:13px">暂无待审单</p></div>
+  </div>
+
+  <div class="card full">
+    <h2>③ 台账与审计日志 <button class="ghost" style="float:right" onclick="loadLedger()">刷新</button></h2>
+    <table id="ledgerTable">
+      <thead><tr><th>时间</th><th>单号</th><th>判定</th><th>理由（含条款引用）</th><th>token</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+function logLine(html, cls="") {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.innerHTML = html;
+  $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+async function runDemo(inv) {
+  logLine(`▶ 提交示例单 ${inv} ……`, "sys");
+  $("verdict").style.display = "none";
+  const r = await fetch(`/demo/${inv}`, {method: "POST"}).then(r => r.json());
+  listen(r.thread_id);
+}
+
+async function runUpload() {
+  const f = $("file").files[0];
+  if (!f) return alert("先选一张发票图");
+  const b64 = await new Promise(res => {
+    const rd = new FileReader();
+    rd.onload = () => res(rd.result.split(",")[1]);
+    rd.readAsDataURL(f);
+  });
+  logLine("▶ 上传发票，提交审核……", "sys");
+  const r = await fetch("/audit", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({image_b64: b64, category: $("cat").value})
+  }).then(r => r.json());
+  listen(r.thread_id);
+}
+
+function listen(tid) {
+  const es = new EventSource(`/audit/${tid}/stream`);
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    if (ev.node === "__done__") {
+      logLine(`■ 终态 <b>${ev.verdict}</b>（token ${ev.tokens}）<br>&nbsp;&nbsp;${ev.note}`,
+              ev.verdict === "pass" ? "" : "bad");
+      showVerdict(ev.verdict, ev.note);
+      es.close(); loadPending(); loadLedger();
+    } else if (ev.node === "__interrupt__") {
+      if (!ev.gate_kind) return;  // stream 原始中断事件，等带载荷的那条
+      logLine(`⏸ 挂起转人工 [${ev.gate_kind}] ${ev.note}`, "warn");
+      es.close(); loadPending();
+    } else if (ev.node === "__error__") {
+      logLine(`✗ 出错: ${ev.note}`, "bad"); es.close();
+    } else {
+      logLine(`→ 节点 <b>${ev.node}</b> 完成 ${ev.note || ""}`);
+    }
+  };
+}
+
+function showVerdict(v, reason) {
+  const el = $("verdict");
+  el.style.display = "block";
+  el.className = "verdict-card " + (v === "pass" ? "pass" : "reject");
+  el.innerHTML = `<b>判定：${v}</b> ｜ ${reason}`;
+}
+
+async function loadPending() {
+  const list = await fetch("/pending").then(r => r.json());
+  const box = $("pending");
+  if (!list.length) { box.innerHTML = '<p style="color:#9ca3af;font-size:13px">暂无待审单</p>'; return; }
+  box.innerHTML = list.map(p => `
+    <div style="border:1px solid #fde68a;border-radius:8px;padding:10px;margin-bottom:8px">
+      <span class="pill ${p.gate_kind}">${p.gate_kind}</span>
+      <b>${p.invoice_id}</b> ｜ ${p.snapshot.seller} ｜ ¥${p.snapshot.total}<br>
+      <span style="font-size:12px;color:#6b7280">${p.system_reason}</span><br>
+      <input id="note-${p.thread_id}" placeholder="批复意见" style="width:55%">
+      <button class="ok" onclick="decide('${p.thread_id}','approve')">批准</button>
+      <button class="no" onclick="decide('${p.thread_id}','reject')">驳回</button>
+    </div>`).join("");
+}
+
+async function decide(tid, action) {
+  const note = ($("note-" + tid) || {}).value || "";
+  const r = await fetch("/decide", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({thread_id: tid, action, note})
+  }).then(r => r.json());
+  logLine(`▶ 人工批复 ${action} → 续跑终态 <b>${r.verdict}</b> ${r.reason}`,
+          action === "approve" ? "sys" : "bad");
+  loadPending(); loadLedger();
+}
+
+async function loadLedger() {
+  const d = await fetch("/ledger").then(r => r.json());
+  const tb = $("ledgerTable").querySelector("tbody");
+  tb.innerHTML = (d.audit_log || []).slice().reverse().map(l => `
+    <tr><td>${l.ts}</td><td>${l.invoice_id}</td>
+        <td><span class="pill ${l.verdict}">${l.verdict}</span></td>
+        <td>${l.reason || "（挂起待审）"}</td><td>${l.tokens}</td></tr>`).join("");
+}
+
+loadPending(); loadLedger();
+</script>
+</body>
+</html>

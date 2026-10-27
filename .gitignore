@@ -1,0 +1,22 @@
+# 依赖与环境
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# 密钥（不入库）
+.env
+config.local
+
+# 运行时产物（可重建，不入库）
+checkpoints.sqlite
+pending_queue.json
+demo_server*.log
+_demo_backup_*/
+project2/agent/uploads/*.jpg
+project2/agent/ledger_demo.csv
+project2/agent/*.log
+
+# 系统
+.DS_Store
+Thumbs.db
